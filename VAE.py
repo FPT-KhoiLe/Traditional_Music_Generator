@@ -1,112 +1,114 @@
 import torch
-import torch.nn.functional as F
 from torch import nn
-from torchvision import datasets, transforms
-import matplotlib.pyplot as plt
+import torch.nn.functional as F
 
-class Encoder(nn.Module):
+class Encoder_LN(nn.Module):
     def __init__(self, latent_dim):
-        super(Encoder, self).__init__()
-
-        # Build Model With LN
+        super(Encoder_LN, self).__init__()
         self.relu = nn.ReLU()
-        self.fc1 = nn.Linear(in_features=28*28, out_features=400)
+        self.fc1 = nn.Linear(in_features=28 * 28, out_features=400)
         self.fc2 = nn.Linear(in_features=400, out_features=128)
-        self.fc_mu = nn.Linear(in_features=128, out_features=latent_dim) # Mu
-        self.fc_log_var = nn.Linear(in_features=128, out_features=latent_dim) # Log of variance
+        self.fc_mu = nn.Linear(in_features=128, out_features=latent_dim)  # Mu
+        self.fc_log_var = nn.Linear(in_features=128, out_features=latent_dim)  # Log of variance
 
     def forward(self, x):
         x = self.relu(self.fc1(x))
         x = self.relu(self.fc2(x))
-        mu = self.relu(self.fc_mu(x))
-        log_var = self.relu(self.fc_log_var(x))
+        # No activation function on mu and log_var
+        mu = self.fc_mu(x)
+        log_var = self.fc_log_var(x)
         return mu, log_var
 
-class Decoder(nn.Module):
+
+class Decoder_LN(nn.Module):
     def __init__(self, latent_dim):
-        super(Decoder, self).__init__()
+        super(Decoder_LN, self).__init__()
         self.relu = nn.ReLU()
         self.up1 = nn.Linear(in_features=latent_dim, out_features=128)
         self.up2 = nn.Linear(in_features=128, out_features=400)
-        self.up3 = nn.Linear(in_features=400, out_features=28*28)
+        self.up3 = nn.Linear(in_features=400, out_features=28 * 28)
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, mu, log_var):
-        sigma = torch.exp(0.5 * log_var)
-        epsilon = torch.randn_like(sigma)
-        z = mu + sigma * epsilon
-
+    def forward(self, z):
+        # Decoder should take z (not mu, log_var)
         reconstructed = self.relu(self.up1(z))
         reconstructed = self.relu(self.up2(reconstructed))
         reconstructed = self.sigmoid(self.up3(reconstructed))
         return reconstructed
 
-class VAE(nn.Module):
-    def __init__(self, latent_dim = 2):
-        """
-        :param latent_dim: Latent dim <= 128
-        """
-        super(VAE, self).__init__()
-        self.encoder = Encoder(latent_dim)
-        self.decoder = Decoder(latent_dim)
+
+class VAE_LN(nn.Module):
+    def __init__(self, latent_dim=2):
+        super(VAE_LN, self).__init__()
+        self.latent_dim = latent_dim
+        self.encoder = Encoder_LN(latent_dim)
+        self.decoder = Decoder_LN(latent_dim)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        z = mu + eps * std
+        return z
 
     def forward(self, x):
         mu, log_var = self.encoder(x)
-        decoded = self.decoder(mu, log_var)
+        z = self.reparameterize(mu, log_var)
+        decoded = self.decoder(z)
         return decoded, mu, log_var
 
-def visualize():
-    data = datasets.MNIST(root='./data', train=True, transform=transforms.ToTensor(), download=True)
-    dataloader = torch.utils.data.DataLoader(data, batch_size=64, shuffle=False)
 
-    # dataiter = iter(dataloader)
-    # x, label = next(dataiter)
-    # image = x[0].cpu().detach().numpy()
-    # image = image.transpose((1, 2, 0))
-    # plt.imshow(image, cmap='gray')
-    # plt.axis('off')
-    # plt.show()
+class Encoder_CNN(nn.Module):
+    def __init__(self, in_channels, latent_dim):
+        super(Encoder_CNN, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, 3, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, 3, stride=2, padding=1)
+        self.conv3 = nn.Conv2d(64, 128, 3, stride=2, padding=1)
+        self.fc_size = 128 * 4 * 4
+        self.fc_mu = nn.Linear(in_features=self.fc_size, out_features=latent_dim)
+        self.fc_log_var = nn.Linear(in_features=self.fc_size, out_features=latent_dim)
 
-    model = VAE(latent_dim=128).cuda()
-    rec_loss_func = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    num_epochs = 1
-    outputs = []
-    print(model)
-    for epoch in range(num_epochs):
-        for x, y in dataloader:
-            x = x.view(-1, 28*28) # For Linear neuron network
-            x = x.cuda()
-            x_rec, mu, log_var = model(x)
-            rec_loss = rec_loss_func(x_rec, x)
-            kl_div_loss = torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
-            loss = rec_loss + kl_div_loss
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+    def forward(self, x):
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = x.view(-1, self.fc_size)
+        mu = self.fc_mu(x)
+        log_var = self.fc_log_var(x)
+        return mu, log_var
 
-        outputs.append([epoch, x, x_rec])
+class Decoder_CNN(nn.Module):
+    def __init__(self, in_channels, latent_dim):
+        super(Decoder_CNN, self).__init__()
+        self.fc = nn.Linear(in_features=latent_dim, out_features=128*4*4)
 
-    for k in range(0, num_epochs, 4):
-        plt.figure(figsize=(10, 10))
-        plt.gray()
-        imgs = outputs[k][1].cpu().detach().numpy()
-        recons = outputs[k][2].cpu().detach().numpy()
-        print(imgs)
-        for i, item in enumerate(imgs):
-            if i >= 9: break
-            plt.subplot(2, 9, i + 1)
-            item = item.reshape(-1, 28, 28)
-            plt.imshow(item[0], cmap='gray')
-            plt.axis('off')
-        # plt.show()
-        for i, item in enumerate(recons):
-            if i >= 9: break
-            plt.subplot(2, 9, 9 + i + 1)
-            item = item.reshape(-1, 28, 28)
-            plt.imshow(item[0], cmap='gray')
-            plt.axis('off')
-        plt.show()
+        self.de_conv1 = nn.ConvTranspose2d(128, 64, 3, stride=2, padding=1)
+        self.de_conv2 = nn.ConvTranspose2d(64, 32, 3, stride=2, padding=1, output_padding=1)
+        self.de_conv3 = nn.ConvTranspose2d(32, in_channels, 3, stride=2, padding=1, output_padding=1)
 
-if __name__ == '__main__':
-    visualize()
+    def forward(self, z):
+        z = F.relu(self.fc(z))
+        z = z.view(-1, 128, 4, 4)
+        z = F.relu(self.de_conv1(z))
+        z = F.relu(self.de_conv2(z))
+        z = F.sigmoid(self.de_conv3(z))
+        return z
+
+class VAE_CNN(nn.Module):
+    def __init__(self, in_channels = 1, latent_dim=2):
+        super(VAE_CNN, self).__init__()
+        self.latent_dim = latent_dim
+        self.encoder = Encoder_CNN(in_channels, latent_dim)
+        self.decoder = Decoder_CNN(in_channels, latent_dim)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        z = mu + eps * std
+        return z
+
+    def forward(self, x):
+        mu, log_var = self.encoder(x)
+        z = self.reparameterize(mu, log_var)
+
+        decoded = self.decoder(z)
+        return decoded, mu, log_var # Return mu and log_var for loss function
